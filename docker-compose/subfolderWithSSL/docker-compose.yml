@@ -1,0 +1,62 @@
+version: '3'
+
+services:
+  traefik:
+    image: 'traefik'
+    command:
+      - '--api=true'
+      - '--api.insecure=true'
+      - '--api.dashboard=true'
+      - '--providers.docker=true'
+      - '--providers.docker.exposedbydefault=false'
+      - '--entrypoints.websecure.address=:443'
+      - '--certificatesresolvers.mytlschallenge.acme.tlschallenge=true'
+      - '--certificatesresolvers.mytlschallenge.acme.email=${SSL_EMAIL}'
+      - '--certificatesresolvers.mytlschallenge.acme.storage=/letsencrypt/acme.json'
+    ports:
+      - '443:443'
+      - '80:80'
+    volumes:
+      - ${DATA_FOLDER}/letsencrypt:/letsencrypt
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  initContainer:
+    image: busybox
+    command: ['sh', '-c', 'chown -R 1000:1000 /home/node/.flowease']
+    volumes:
+      - ${DATA_FOLDER}/.flowease:/home/node/.flowease
+
+  flowease:
+    image: docker.flowease.khulnasoft.com/flowease/flowease
+    ports:
+      - '127.0.0.1:5678:5678'
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.flowease.rule=Host(`${DOMAIN_NAME}`)
+      - traefik.http.routers.flowease.tls=true
+      - traefik.http.routers.flowease.entrypoints=websecure
+      - 'traefik.http.routers.flowease.rule=PathPrefix(`/${SUBFOLDER}{regex:$$|/.*}`)'
+      - 'traefik.http.middlewares.flowease-stripprefix.stripprefix.prefixes=/${SUBFOLDER}'
+      - 'traefik.http.routers.flowease.middlewares=flowease-stripprefix'
+      - traefik.http.routers.flowease.tls.certresolver=mytlschallenge
+      - traefik.http.middlewares.flowease.headers.SSLRedirect=true
+      - traefik.http.middlewares.flowease.headers.STSSeconds=315360000
+      - traefik.http.middlewares.flowease.headers.browserXSSFilter=true
+      - traefik.http.middlewares.flowease.headers.contentTypeNosniff=true
+      - traefik.http.middlewares.flowease.headers.forceSTSHeader=true
+      - traefik.http.middlewares.flowease.headers.SSLHost=${DOMAIN_NAME}
+      - traefik.http.middlewares.flowease.headers.STSIncludeSubdomains=true
+      - traefik.http.middlewares.flowease.headers.STSPreload=true
+    environment:
+      - FLOWEASE_HOST=${DOMAIN_NAME}
+      - FLOWEASE_PORT=5678
+      - FLOWEASE_PROTOCOL=https
+      - NODE_ENV=production
+      - FLOWEASE_PATH
+      - WEBHOOK_URL=https://${DOMAIN_NAME}${FLOWEASE_PATH}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${DATA_FOLDER}/.flowease:/home/node/.flowease
+    depends_on:
+      initContainer:
+        condition: service_completed_successfully
